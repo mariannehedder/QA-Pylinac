@@ -1,0 +1,7 @@
+pylinac==3.37.0
+streamlit>=1.34
+pandas
+pylibjpeg
+pylibjpeg-libjpeg
+pylibjpeg-openjpeg
+matplotlib
