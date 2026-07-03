@@ -38,13 +38,19 @@ def extract_zip(zip_path: Path, destination: Path) -> Path:
     return destination
 
 
-def uploaded_dicom_source(uploaded_files, work_dir: Path, input_name: str) -> Path:
+def uploaded_dicom_files(uploaded_files, work_dir: Path, input_name: str) -> list[Path]:
     input_dir = work_dir / input_name
     saved_files = save_uploaded_files(uploaded_files, input_dir)
     zip_files = [path for path in saved_files if path.suffix.lower() == ".zip"]
     if len(zip_files) == 1 and len(saved_files) == 1:
-        return extract_zip(zip_files[0], work_dir / f"{input_name}_zip")
-    return input_dir
+        input_dir = extract_zip(zip_files[0], work_dir / f"{input_name}_zip")
+
+    dicom_files = [
+        path
+        for path in input_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".dcm", ".dicom", ""}
+    ]
+    return sorted(dicom_files)
 
 
 def read_bytes(path: Path) -> bytes:
@@ -165,7 +171,10 @@ def wl_cube_page() -> None:
             summary_path = work_dir / "winston_lutz_wl_cube.png"
 
             try:
-                dicom_source = uploaded_dicom_source(uploaded_files, work_dir, "wl_cube_input")
+                dicom_files = uploaded_dicom_files(uploaded_files, work_dir, "wl_cube_input")
+                if not dicom_files:
+                    st.error("Nenhum arquivo DICOM foi encontrado no upload.")
+                    return
                 axis_mapping = None
                 if use_axis_mapping:
                     axis_mapping = {
@@ -183,7 +192,7 @@ def wl_cube_page() -> None:
 
                 with st.spinner("Analisando WL Cube..."):
                     wl = WinstonLutz(
-                        str(dicom_source),
+                        [str(path) for path in dicom_files],
                         use_filenames=params["use_filenames"],
                         axis_mapping=axis_mapping,
                         sid=params["sid"],
@@ -258,7 +267,10 @@ def multimet_page() -> None:
             summary_path = work_dir / "winston_lutz_multimet.png"
 
             try:
-                dicom_source = uploaded_dicom_source(uploaded_files, work_dir, "multimet_input")
+                dicom_files = uploaded_dicom_files(uploaded_files, work_dir, "multimet_input")
+                if not dicom_files:
+                    st.error("Nenhum arquivo DICOM foi encontrado no upload.")
+                    return
                 axis_mapping = None
                 if use_axis_mapping:
                     axis_mapping = {
@@ -276,7 +288,7 @@ def multimet_page() -> None:
 
                 with st.spinner("Analisando MultiMet..."):
                     wl = WinstonLutzMultiTargetMultiField(
-                        str(dicom_source),
+                        [str(path) for path in dicom_files],
                         use_filenames=params["use_filenames"],
                         axis_mapping=axis_mapping,
                         sid=params["sid"],
