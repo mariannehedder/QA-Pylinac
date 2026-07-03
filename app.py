@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 import pandas as pd
+import pydicom
 import streamlit as st
 from pylinac import PicketFence, WinstonLutz, WinstonLutzMultiTargetMultiField
 from pylinac.core.scale import MachineScale
@@ -51,6 +52,55 @@ def uploaded_dicom_files(uploaded_files, work_dir: Path, input_name: str) -> lis
         if path.is_file() and path.suffix.lower() in {".dcm", ".dicom", ""}
     ]
     return sorted(dicom_files)
+
+
+def dicom_text_values(path: Path) -> list[str]:
+    dataset = pydicom.dcmread(str(path), stop_before_pixels=True, force=True)
+    values = [path.name, path.stem]
+    for element in dataset.iterall():
+        if element.VR in {"LO", "SH", "ST", "LT", "UT", "CS"}:
+            value = element.value
+            if isinstance(value, (list, tuple)):
+                values.extend(str(item) for item in value)
+            else:
+                values.append(str(value))
+    return values
+
+
+def identify_field_name(path: Path, expected_names: set[str]) -> str | None:
+    for value in dicom_text_values(path):
+        normalized = value.strip().upper()
+        if normalized in expected_names:
+            return normalized
+    return None
+
+
+def axis_mapping_by_filename(axis_table: pd.DataFrame, dicom_files: list[Path]) -> dict[str, tuple[int, int, int]]:
+    expected_axes = {
+        str(row["campo"]).strip().upper(): (
+            int(float(row["gantry"])),
+            int(float(row["collimator"])),
+            int(float(row["couch"])),
+        )
+        for _, row in axis_table.dropna().iterrows()
+        if str(row.get("campo", "")).strip()
+    }
+    mapping = {}
+    missing = []
+    for path in dicom_files:
+        field_name = identify_field_name(path, set(expected_axes))
+        if field_name is None:
+            missing.append(path.name)
+            continue
+        mapping[path.name] = expected_axes[field_name]
+    if missing:
+        missing_text = "\n".join(missing)
+        raise ValueError(
+            "Nao foi possivel identificar o campo de alguns DICOMs. "
+            "Verifique se os metadados contem nomes como A1/A2 ou M1/M2.\n\n"
+            f"Arquivos sem campo identificado:\n{missing_text}"
+        )
+    return mapping
 
 
 def read_bytes(path: Path) -> bytes:
@@ -177,22 +227,14 @@ def wl_cube_page() -> None:
                     return
                 axis_mapping = None
                 if use_axis_mapping:
-                    axis_mapping = {
-                        str(row["campo"]).strip(): (
-                            int(float(row["gantry"])),
-                            int(float(row["collimator"])),
-                            int(float(row["couch"])),
-                        )
-                        for _, row in axis_table.dropna().iterrows()
-                        if str(row.get("campo", "")).strip()
-                    }
+                    axis_mapping = axis_mapping_by_filename(axis_table, dicom_files)
                     if not axis_mapping:
                         st.error("Informe pelo menos um campo na tabela A1-A13.")
                         return
 
                 with st.spinner("Analisando WL Cube..."):
                     wl = WinstonLutz(
-                        [str(path) for path in dicom_files],
+                        str(dicom_files[0].parent),
                         use_filenames=params["use_filenames"],
                         axis_mapping=axis_mapping,
                         sid=params["sid"],
@@ -273,22 +315,14 @@ def multimet_page() -> None:
                     return
                 axis_mapping = None
                 if use_axis_mapping:
-                    axis_mapping = {
-                        str(row["campo"]).strip(): (
-                            int(float(row["gantry"])),
-                            int(float(row["collimator"])),
-                            int(float(row["couch"])),
-                        )
-                        for _, row in axis_table.dropna().iterrows()
-                        if str(row.get("campo", "")).strip()
-                    }
+                    axis_mapping = axis_mapping_by_filename(axis_table, dicom_files)
                     if not axis_mapping:
                         st.error("Informe pelo menos um campo na tabela M1-M10.")
                         return
 
                 with st.spinner("Analisando MultiMet..."):
                     wl = WinstonLutzMultiTargetMultiField(
-                        [str(path) for path in dicom_files],
+                        str(dicom_files[0].parent),
                         use_filenames=params["use_filenames"],
                         axis_mapping=axis_mapping,
                         sid=params["sid"],
